@@ -220,6 +220,8 @@ export default function App() {
   const [activeMode, setActiveMode] = useState<keyof typeof MODES>("general");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState(() => localStorage.getItem("user_gemini_api_key") || "");
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -247,11 +249,12 @@ export default function App() {
         const parsed = JSON.parse(savedMessages);
         setMessages(parsed);
         // Re-initialize genai with history
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
+        const envKey = process.env.GEMINI_API_KEY;
+        const keyToUse = apiKeyInput || envKey;
+        if (!keyToUse) {
           console.warn("GEMINI_API_KEY is not set.");
         }
-        const ai = new GoogleGenAI({ apiKey: apiKey || "MISSING_KEY" });
+        const ai = new GoogleGenAI({ apiKey: keyToUse || "MISSING_KEY" });
         const contents = parsed
            .filter((m: ChatMessage) => m.content.trim() !== "" && !m.content.startsWith("Привет! Я активировал")) // Ignore welcome msg if any
            .map((m: ChatMessage) => ({ role: m.role, parts: [{ text: m.content }] }));
@@ -292,12 +295,13 @@ export default function App() {
   }, [messages, activeMode]);
 
   const startNewChat = () => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      setMessages([{ role: "model", content: "⚠️ АПИ ключ не найден. Пожалуйста, добавьте `GEMINI_API_KEY` в переменные окружения на Vercel (General -> Settings -> Environment Variables) и пересоберите проект (Deployments -> Redeploy)." }]);
+    const envKey = process.env.GEMINI_API_KEY;
+    const keyToUse = apiKeyInput || envKey;
+    if (!keyToUse) {
+      setMessages([{ role: "model", content: "⚠️ АПИ ключ не найден. Пожалуйста, зайдите в 'Настройки' и укажите свой Gemini API Key, или добавьте его в переменные окружения на Vercel." }]);
       return;
     }
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({ apiKey: keyToUse });
     chatRef.current = ai.chats.create({
       model: "gemini-3.1-pro-preview",
       config: {
@@ -516,7 +520,10 @@ export default function App() {
         </div>
 
         <div className="p-4 border-t border-[#1f1f25] text-sm space-y-1">
-          <button className="flex items-center gap-3 w-full text-gray-400 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-[#1f1f25] hover:border-[#2a2a35] border border-transparent">
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-3 w-full text-gray-400 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-[#1f1f25] hover:border-[#2a2a35] border border-transparent"
+          >
             <Settings2 size={18} />
             Настройки
           </button>
@@ -553,6 +560,52 @@ export default function App() {
                 className="flex-1 bg-pink-600 hover:bg-pink-500 text-white py-3 rounded-xl font-medium transition-colors shadow-[0_0_15px_rgba(236,72,153,0.4)]"
               >
                 Очистить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 transition-opacity">
+          <div className="bg-[#0f0f13] border border-[#2a2a35] rounded-3xl p-6 md:p-8 max-w-md w-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] animate-in zoom-in-95 duration-200">
+            <h3 className="text-xl font-bold text-white mb-2">Настройки</h3>
+            <p className="text-gray-400 mb-6 text-[14px]">
+              Здесь вы можете указать свой личный Gemini API ключ, если хотите использовать собственную квоту или деплоите проект на Vercel. Ваш ключ сохраняется локально в браузере.
+            </p>
+            <div className="mb-8">
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full bg-[#1f1f25] border border-[#3f3f4e] focus:border-cyan-500/50 focus:shadow-[0_0_15px_rgba(34,211,238,0.2)] rounded-xl px-4 py-3 text-white outline-none transition-all"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                Получить бесплатный ключ можно <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline">здесь</a>.
+              </p>
+            </div>
+            
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="px-5 py-2.5 bg-[#1f1f25] hover:bg-[#2a2a35] text-white rounded-xl font-medium transition-colors border border-[#3f3f4e]"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.setItem("user_gemini_api_key", apiKeyInput);
+                  setIsSettingsOpen(false);
+                  startNewChat(); // restart with new key!
+                }}
+                className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-medium transition-colors shadow-[0_0_15px_rgba(34,211,238,0.4)]"
+              >
+                Сохранить
               </button>
             </div>
           </div>
