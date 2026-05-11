@@ -1,0 +1,6 @@
+{
+  "name": "Мой ChatGPT",
+  "description": "Собственный умный чат-бот на базе LLM от Google (Gemini 3.1 Pro).",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
