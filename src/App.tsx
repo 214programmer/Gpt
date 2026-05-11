@@ -219,6 +219,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [activeMode, setActiveMode] = useState<keyof typeof MODES>("general");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -240,11 +241,63 @@ export default function App() {
 
   // Initialize or re-initialize the chat when mode changes
   useEffect(() => {
-    startNewChat();
+    const savedMessages = localStorage.getItem(`gpt_history_${activeMode}`);
+    if (savedMessages) {
+      try {
+        const parsed = JSON.parse(savedMessages);
+        setMessages(parsed);
+        // Re-initialize genai with history
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          console.warn("GEMINI_API_KEY is not set.");
+        }
+        const ai = new GoogleGenAI({ apiKey: apiKey || "MISSING_KEY" });
+        const contents = parsed
+           .filter((m: ChatMessage) => m.content.trim() !== "" && !m.content.startsWith("Привет! Я активировал")) // Ignore welcome msg if any
+           .map((m: ChatMessage) => ({ role: m.role, parts: [{ text: m.content }] }));
+           
+        chatRef.current = ai.chats.create({
+          model: "gemini-3.1-pro-preview",
+          config: {
+            systemInstruction: MODES[activeMode].instruction,
+          },
+        });
+        
+        // Push history if possible (SDK might not allow pushing raw history directly like this in v1.29 without some hack, actually we can just pass history to config in v2 or not do it. Let's just not seed the chat context for past messages if it's too complex or we can do a simpler approach: create with history)
+        // Wait, SDK chat.create allows passing `history` array! Let's do that!
+        
+        chatRef.current = ai.chats.create({
+          model: "gemini-3.1-pro-preview",
+          config: {
+            systemInstruction: MODES[activeMode].instruction,
+          },
+          history: parsed
+             .filter((m: ChatMessage) => m.content.trim() !== "" && !m.content.startsWith("Привет! Я активировал"))
+             .map((m: ChatMessage) => ({ role: m.role === "user" ? "user" : "model", parts: [{ text: m.content }] }))
+        });
+
+      } catch (e) {
+        startNewChat();
+      }
+    } else {
+      startNewChat();
+    }
   }, [activeMode]);
 
+  // Save messages to local storage whenever they change
+  useEffect(() => {
+    if (messages.length > 0) {
+      localStorage.setItem(`gpt_history_${activeMode}`, JSON.stringify(messages));
+    }
+  }, [messages, activeMode]);
+
   const startNewChat = () => {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      setMessages([{ role: "model", content: "⚠️ АПИ ключ не найден. Пожалуйста, добавьте `GEMINI_API_KEY` в переменные окружения на Vercel (General -> Settings -> Environment Variables) и пересоберите проект (Deployments -> Redeploy)." }]);
+      return;
+    }
+    const ai = new GoogleGenAI({ apiKey });
     chatRef.current = ai.chats.create({
       model: "gemini-3.1-pro-preview",
       config: {
@@ -258,6 +311,7 @@ export default function App() {
         content: `Привет! Я активировал режим **«${MODES[activeMode].name}»**. Чем я могу помочь?`,
       },
     ]);
+    localStorage.removeItem(`gpt_history_${activeMode}`);
     if (window.innerWidth < 1024) {
       setSidebarOpen(false);
     }
@@ -467,7 +521,7 @@ export default function App() {
             Настройки
           </button>
           <button 
-            onClick={startNewChat}
+            onClick={() => setIsClearModalOpen(true)}
             className="flex items-center gap-3 w-full text-pink-500 hover:text-pink-400 transition-colors py-2 px-3 rounded-xl hover:bg-pink-950/20 hover:border-pink-500/30 border border-transparent"
           >
             <Trash2 size={18} />
@@ -475,6 +529,35 @@ export default function App() {
           </button>
         </div>
       </aside>
+
+      {/* Clear Modal */}
+      {isClearModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 transition-opacity">
+          <div className="bg-[#0f0f13] border border-[#2a2a35] rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] animate-in zoom-in-95 duration-200">
+            <h3 className="text-xl font-bold text-white mb-2">Очистить историю?</h3>
+            <p className="text-gray-400 mb-8 text-[15px] leading-relaxed">
+              Вы уверены, что хотите удалить историю сообщений для режима <span className="text-white font-medium">"{MODES[activeMode].name}"</span>? Это действие нельзя отменить.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setIsClearModalOpen(false)}
+                className="flex-1 bg-[#1f1f25] hover:bg-[#2a2a35] text-white py-3 rounded-xl font-medium transition-colors border border-[#3f3f4e]"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={() => {
+                  startNewChat();
+                  setIsClearModalOpen(false);
+                }}
+                className="flex-1 bg-pink-600 hover:bg-pink-500 text-white py-3 rounded-xl font-medium transition-colors shadow-[0_0_15px_rgba(236,72,153,0.4)]"
+              >
+                Очистить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main chat area */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#050505] relative text-gray-200">
@@ -498,7 +581,7 @@ export default function App() {
         </header>
 
         <div className="flex-1 overflow-y-auto w-full pb-44 pt-4" ref={scrollContainerRef}>
-          {messages.length === 0 ? (
+          {messages.length === 0 || (messages.length === 1 && messages[0].role === "model" && messages[0].content.startsWith("Привет!")) ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-400 p-8 text-center mt-[-10vh]">
               <div className={clsx("w-20 h-20 rounded-[28px] flex items-center justify-center mb-6", MODES[activeMode].color)}>
                 {React.createElement(MODES[activeMode].icon, { size: 36, strokeWidth: 1.5 })}
@@ -506,7 +589,39 @@ export default function App() {
               <h2 className="text-3xl font-bold text-white mb-3 tracking-tight drop-shadow-sm">
                 Добро пожаловать в <span className="text-gradient-red whitespace-nowrap">GPT Прудниковых!</span>
               </h2>
-              <p className="max-w-md text-gray-400 text-lg leading-relaxed">Я готов помочь вам с задачами, от крутого кода до креативных идей. Вводите запрос!</p>
+              <p className="max-w-md text-gray-400 text-lg leading-relaxed mb-10">Я готов помочь вам с задачами, от крутого кода до креативных идей. Вводите запрос!</p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl w-full">
+                {(activeMode === "general" ? [
+                  "Объясни квантовую физику",
+                  "Секретный рецепт пиццы",
+                  "Как подготовиться к собесу?",
+                  "Сделай краткую выжимку"
+                ] : activeMode === "build" ? [
+                  "Напиши Змейку на JS",
+                  "Сделай UI дашборда",
+                  "Напиши ToDo на React",
+                  "Python скрипт парсера"
+                ] : [
+                  "Идеи для Sci-Fi романа",
+                  "Шутка про ITшников",
+                  "Стихотворение о весне",
+                  "Что если люди летали бы?"
+                ]).map((suggestion, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setInput(suggestion);
+                      if (textareaRef.current) {
+                        textareaRef.current.focus();
+                      }
+                    }}
+                    className="p-4 bg-[#0f0f13] border border-[#2a2a35] hover:border-cyan-500/50 hover:shadow-[0_0_15px_rgba(34,211,238,0.15)] rounded-2xl text-left text-sm text-gray-300 hover:text-white transition-all text-ellipsis overflow-hidden whitespace-nowrap"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 pt-2 pb-12 flex flex-col gap-6">
